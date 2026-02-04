@@ -2,7 +2,7 @@ from aiogram import Router
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram import Bot
-from services.scheduler import parse_and_save_events
+from services.scheduler import run_parsing_cycle
 from sqlalchemy.orm import Session
 from database.engine import SessionLocal
 from database.models import User, Event
@@ -27,7 +27,7 @@ async def cmd_parse(message: Message, bot: Bot):
         await message.answer("🔍 Начинаю парсинг событий... Это может занять некоторое время.")
         
         # Запускаем парсинг
-        await parse_and_save_events(bot)
+        await run_parsing_cycle(bot)
         
         # Проверяем, сколько событий в БД
         events_count = db.query(Event).count()
@@ -79,6 +79,7 @@ async def cmd_help(message: Message):
         "📖 Справка по командам:\n\n"
         "/start - Начать работу с ботом\n"
         "/settings - Изменить настройки (индустрии и города)\n"
+        "/events - Посмотреть текущие выставки\n"
         "/parse - Запустить поиск новых событий вручную\n"
         "/stats - Показать статистику\n"
         "/help - Показать эту справку\n\n"

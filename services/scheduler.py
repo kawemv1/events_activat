@@ -1,93 +1,53 @@
+import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy.orm import Session
+from apscheduler.triggers.cron import CronTrigger
+from aiogram import Bot
 from database.engine import SessionLocal
 from database.models import Event
 from services.parser import EventParser
-from services.notification import notify_users_about_events
-from config import PARSING_INTERVAL_MINUTES
-from aiogram import Bot
+from services.notification import notify_users, notify_no_new_events
+from config import DAILY_PARSING_HOUR, DAILY_PARSING_MINUTE, SCHEDULER_TIMEZONE
 import logging
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
+scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
-scheduler = AsyncIOScheduler()
-
-
-async def parse_and_save_events(bot: Bot):
-    """Парсинг событий и сохранение в БД"""
-    db: Session = SessionLocal()
-    parser = None
+async def run_parsing_cycle(bot: Bot):
+    logger.info("Starting parsing cycle...")
+    parser = EventParser()
+    db = SessionLocal()
     try:
-        parser = EventParser()
-        events_data = await parser.parse_all_sources()
-
-        new_events = []
-
-        for event_data in events_data:
-            # Проверяем, есть ли уже такое событие в БД (по URL)
-            existing = db.query(Event).filter(Event.url == event_data['url']).first()
-
-            if not existing:
-                # Создаем новое событие
-                event = Event(
-                    title=event_data['title'],
-                    description=event_data['description'],
-                    city=event_data['city'],
-                    start_date=event_data['start_date'],
-                    end_date=event_data['end_date'],
-                    url=event_data['url'],
-                    source=event_data['source'],
-                    industry=event_data.get('industry'),
-                )
+        events_data = await parser.parse_all()
+        new_events_objects = []
+        
+        for e_data in events_data:
+            exists = db.query(Event).filter(Event.url == e_data['url']).first()
+            if not exists:
+                event = Event(**e_data)
                 db.add(event)
-                new_events.append(event)
-            else:
-                # Обновляем существующее событие
-                existing.title = event_data['title']
-                existing.description = event_data['description']
-                existing.city = event_data['city']
-                existing.start_date = event_data['start_date']
-                existing.end_date = event_data['end_date']
-                existing.updated_at = datetime.utcnow()
-
-        db.flush()  # Получаем ID для новых событий
-        db.commit()
-
-        # Отправляем уведомления о новых событиях
-        if new_events:
-            await notify_users_about_events(bot, new_events)
-            logger.info(f"Найдено {len(new_events)} новых событий")
-
+                db.commit()
+                db.refresh(event)
+                new_events_objects.append(event)
+        
+        if new_events_objects:
+            logger.info(f"Found {len(new_events_objects)} new events. Notifying users...")
+            await notify_users(bot, new_events_objects, db)
+        else:
+            logger.info("No new events found. Telling users.")
+            await notify_no_new_events(bot, db)
+            
     except Exception as e:
-        logger.error(f"Ошибка при парсинге событий: {e}")
-        db.rollback()
+        logger.error(f"Parsing cycle error: {e}")
     finally:
-        if parser:
-            await parser.close()
+        await parser.close()
         db.close()
 
-
-def start_scheduler(bot: Bot, run_immediately: bool = False):
-    """Запуск планировщика"""
+def start_scheduler(bot: Bot):
     scheduler.add_job(
-        parse_and_save_events,
-        trigger=IntervalTrigger(minutes=PARSING_INTERVAL_MINUTES),
+        run_parsing_cycle,
+        CronTrigger(hour=DAILY_PARSING_HOUR, minute=DAILY_PARSING_MINUTE),
         args=[bot],
-        id='parse_events',
-        replace_existing=True,
+        id="daily_events_update",
     )
+    logger.info(f"Daily events update scheduled at {DAILY_PARSING_HOUR:02d}:{DAILY_PARSING_MINUTE:02d} ({SCHEDULER_TIMEZONE})")
     scheduler.start()
-    logger.info(f"Планировщик запущен. Интервал: {PARSING_INTERVAL_MINUTES} минут")
-    
-    if run_immediately:
-        # Запускаем парсинг сразу при старте (асинхронно, не блокируя запуск)
-        import asyncio
-        asyncio.create_task(parse_and_save_events(bot))
-
-
-def stop_scheduler():
-    """Остановка планировщика"""
-    scheduler.shutdown()
-    logger.info("Планировщик остановлен")

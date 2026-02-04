@@ -1,115 +1,99 @@
-from typing import List, Dict
-from sqlalchemy.orm import Session
-from database.engine import SessionLocal
-from database.models import User, Event, UserEvent, Feedback
-from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from handlers.feedback import get_event_keyboard
 import logging
+from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, URLInputFile
+from sqlalchemy.orm import Session
+from database.models import User, Event, UserEvent, Feedback
+from handlers.feedback import get_event_keyboard
 
 logger = logging.getLogger(__name__)
 
+async def notify_users(bot: Bot, events: list, db: Session):
+    users = db.query(User).filter(User.is_active == True).all()
+    
+    for event in events:
+        for user in users:
+            if not _check_filters(user, event):
+                continue
+            
+            if _is_already_sent_or_rejected(user, event, db):
+                continue
 
-def format_event_message(event: Event) -> str:
-    """Форматирование сообщения об ивенте"""
-    message = f"🎯 <b>{event.title}</b>\n\n"
+            try:
+                text = (
+                    f"🎯 <b>{event.title}</b>\n\n"
+                    f"📅 <b>Когда:</b> {event.start_date.strftime('%d.%m.%Y') if event.start_date else 'Дата уточняется'}\n"
+                    f"🏙 <b>Где:</b> {event.city or 'Не указан'} {f'({event.place})' if event.place else ''}\n\n"
+                    f"{event.description[:300]}...\n\n"
+                    f"🔗 <a href='{event.url}'>Подробнее на сайте</a>"
+                )
+                
+                kb = get_event_keyboard(event.id, event.url)
+                
+                if event.image_url:
+                    await bot.send_photo(
+                        chat_id=user.telegram_id,
+                        photo=event.image_url,
+                        caption=text,
+                        parse_mode="HTML",
+                        reply_markup=kb
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=user.telegram_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                        disable_web_page_preview=False
+                    )
+                
+                # Запись об отправке
+                db.add(UserEvent(user_id=user.id, event_id=event.id))
+                db.commit()
+                
+            except Exception as e:
+                logger.error(f"Failed to send event {event.id} to user {user.id}: {e}")
 
-    if event.start_date:
-        date_str = event.start_date.strftime("%d.%m.%Y")
-        if event.end_date:
-            date_str += f" - {event.end_date.strftime('%d.%m.%Y')}"
-        message += f"📅 <b>Даты:</b> {date_str}\n"
-
-    if event.city:
-        message += f"🏙️ <b>Город:</b> {event.city}\n"
-
-    if event.description:
-        message += f"\n{event.description}\n"
-
-    if event.source:
-        message += f"\n📌 Источник: {event.source}"
-
-    return message
-
-
-async def send_event_to_user(bot: Bot, user: User, event: Event, db: Session):
-    """Отправить событие пользователю"""
-    try:
-        # Проверяем, не отправляли ли уже это событие пользователю
-        existing = db.query(UserEvent).filter(
-            UserEvent.user_id == user.id,
-            UserEvent.event_id == event.id
-        ).first()
-
-        if existing:
+def _check_filters(user: User, event: Event) -> bool:
+    # Фильтр по городу
+    if "Все города" not in user.cities:
+        if not event.city or event.city not in user.cities:
             return False
+    # Тут можно добавить фильтр по индустрии, если мы начнем её парсить
+    return True
 
-        # Проверяем фидбек пользователя на это событие
-        feedback = db.query(Feedback).filter(
-            Feedback.user_id == user.id,
-            Feedback.event_id == event.id,
-            Feedback.is_positive == False
-        ).first()
+def get_filtered_events_for_user(user: User, db: Session, limit: int = 100):
+    """Список выставок, подходящих пользователю по фильтрам (город)."""
+    q = db.query(Event).order_by(Event.id.desc())
+    events = q.limit(limit * 2).all()  # взять с запасом, отфильтруем
+    return [e for e in events if _check_filters(user, e)][:limit]
 
-        if feedback:
-            # Пользователь уже отклонил это событие
-            return False
-
-        # Формируем сообщение
-        message = format_event_message(event)
-        keyboard = get_event_keyboard(event.id)
-
-        # Добавляем кнопку со ссылкой
-        keyboard.inline_keyboard.append([
-            InlineKeyboardButton(text="🔗 Открыть сайт", url=event.url)
-        ])
-
-        # Отправляем сообщение
-        await bot.send_message(
-            chat_id=user.telegram_id,
-            text=message,
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-
-        # Сохраняем факт отправки
-        user_event = UserEvent(
-            user_id=user.id,
-            event_id=event.id
-        )
-        db.add(user_event)
-        db.commit()
-
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка отправки события пользователю {user.telegram_id}: {e}")
-        return False
+def _is_already_sent_or_rejected(user: User, event: Event, db: Session) -> bool:
+    sent = db.query(UserEvent).filter_by(user_id=user.id, event_id=event.id).first()
+    if sent: return True
+    
+    rejected = db.query(Feedback).filter_by(
+        user_id=user.id, event_id=event.id, is_positive=False
+    ).first()
+    if rejected: return True
+    
+    return False
 
 
-async def notify_users_about_events(bot: Bot, events: List[Event]):
-    """Уведомить пользователей о новых событиях"""
-    db: Session = SessionLocal()
-    try:
-        # Получаем всех активных пользователей
-        users = db.query(User).filter(User.is_active == True).all()
-
-        for event in events:
-            for user in users:
-                # Проверяем соответствие фильтрам пользователя
-                if not user.industries or not user.cities:
-                    continue
-
-                # Проверяем город
-                if event.city and event.city not in user.cities:
-                    if "Все города" not in user.cities:
-                        continue
-
-                # Проверяем индустрию (если указана)
-                if event.industry and event.industry not in user.industries:
-                    continue
-
-                # Отправляем событие
-                await send_event_to_user(bot, user, event, db)
-
-    finally:
-        db.close()
+async def notify_no_new_events(bot: Bot, db: Session):
+    """Сообщить пользователям, что проверка выполнена и новых выставок пока нет."""
+    users = db.query(User).filter(User.is_active == True).all()
+    # Только тем, у кого уже есть настройки (прошли онбординг)
+    for user in users:
+        if not (user.cities or user.industries):
+            continue
+        try:
+            await bot.send_message(
+                chat_id=user.telegram_id,
+                text=(
+                    "🕐 Проверка выполнена.\n\n"
+                    "Новых выставок по твоим фильтрам пока нет. "
+                    "Загляни позже или нажми /events — там актуальный список."
+                ),
+            )
+        except Exception as e:
+            logger.debug(f"Could not send 'no new events' to user {user.id}: {e}")

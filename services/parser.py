@@ -1,220 +1,225 @@
 import re
+import logging
 import httpx
 from bs4 import BeautifulSoup
-from typing import List, Optional, Dict
 from datetime import datetime
-from config import STOP_WORDS, B2B_KEYWORDS, PARSING_SOURCES
-import logging
+from typing import List, Dict, Optional
+from urllib.parse import urljoin
+from config import STOP_WORDS, B2B_KEYWORDS, CITY_VARIANTS
 
 logger = logging.getLogger(__name__)
 
-
 class EventParser:
-    """Парсер для извлечения информации о выставках с различных сайтов"""
-
     def __init__(self):
-        self.client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        self.client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=self.headers)
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def close(self):
         await self.client.aclose()
 
-    def is_b2b_event(self, text: str) -> bool:
-        """Проверка, является ли событие B2B"""
+    def _clean_text(self, text: str) -> str:
+        if not text: return ""
+        return re.sub(r'\s+', ' ', text).strip()
+
+    def _is_relevant(self, title: str, description: str) -> bool:
+        full_text = (title + " " + description).lower()
+        if any(w in full_text for w in STOP_WORDS):
+            return False
+        if any(w in full_text for w in B2B_KEYWORDS):
+            return True
+        return False # По умолчанию False, если нет явных признаков B2B
+
+    def _extract_city(self, text: str) -> Optional[str]:
         text_lower = text.lower()
-
-        # Проверяем наличие стоп-слов
-        for stop_word in STOP_WORDS:
-            if stop_word.lower() in text_lower:
-                return False
-
-        # Проверяем наличие B2B ключевых слов
-        for keyword in B2B_KEYWORDS:
-            if keyword.lower() in text_lower:
-                return True
-
-        return False
-
-    def extract_date(self, text: str) -> Optional[datetime]:
-        """Извлечение даты из текста"""
-        # Паттерны для дат
-        patterns = [
-            r'(\d{1,2})[./-](\d{1,2})[./-](\d{4})',  # DD.MM.YYYY
-            r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})',  # YYYY.MM.DD
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                try:
-                    if len(match.group(1)) == 4:  # YYYY.MM.DD
-                        year, month, day = match.groups()
-                    else:  # DD.MM.YYYY
-                        day, month, year = match.groups()
-                    return datetime(int(year), int(month), int(day))
-                except (ValueError, IndexError):
-                    continue
-
-        return None
-
-    def extract_city(self, text: str) -> Optional[str]:
-        """Извлечение города из текста"""
-        from config import CITIES
-
-        text_lower = text.lower()
-        for city in CITIES:
-            if city.lower() in text_lower:
+        for city, variants in CITY_VARIANTS.items():
+            if any(v in text_lower for v in variants):
                 return city
         return None
 
-    async def parse_iteca_events(self) -> List[Dict]:
-        """Парсинг iteca.events"""
+    def _extract_date_ru(self, text: str) -> Optional[datetime]:
+        months = {
+            'январ': 1, 'феврал': 2, 'март': 3, 'апрел': 4, 'май': 5, 'июн': 6,
+            'июл': 7, 'август': 8, 'сентябр': 9, 'октябр': 10, 'ноябр': 11, 'декабр': 12
+        }
+        text_lower = text.lower()
+        
+        # Паттерн: 10 - 12 апрель 2026
+        # Ищем год
+        year_match = re.search(r'202[4-9]', text_lower)
+        year = int(year_match.group(0)) if year_match else datetime.now().year
+        
+        for m_name, m_num in months.items():
+            if m_name in text_lower:
+                # Ищем день перед месяцем
+                day_match = re.search(r'(\d{1,2})\s*[—\-]?\s*\d{0,2}\s*' + m_name, text_lower)
+                if day_match:
+                    try:
+                        day = int(day_match.group(1))
+                        return datetime(year, m_num, day)
+                    except: pass
+        return None
+
+    # --- Парсеры для конкретных сайтов ---
+
+    async def parse_iteca(self) -> List[Dict]:
+        """Парсинг Iteca.events (по структуре из ТЗ)"""
         events = []
         try:
-            url = "https://iteca.events"
-            response = await self.client.get(url)
-            response.raise_for_status()
+            url = "https://iteca.events/ru/exhibitions"
+            resp = await self.client.get(url)
+            soup = BeautifulSoup(resp.text, 'lxml')
+            
+            # Селектор из ТЗ: class="p-5 flex flex-col"
+            cards = soup.find_all('div', class_=re.compile(r'p-5 flex flex-col'))
+            
+            for card in cards:
+                try:
+                    title_tag = card.find('h4')
+                    if not title_tag: continue
+                    title = self._clean_text(title_tag.text)
+                    
+                    desc_tag = card.find('p')
+                    description = self._clean_text(desc_tag.text) if desc_tag else ""
+                    
+                    # Дата и место обычно в span
+                    spans = card.find_all('span')
+                    raw_date = spans[0].text if len(spans) > 0 else ""
+                    raw_location = spans[1].text if len(spans) > 1 else ""
+                    
+                    city = self._extract_city(raw_location)
+                    date = self._extract_date_ru(raw_date)
+                    
+                    # Ссылка
+                    link_parent = card.find_parent('a')
+                    event_url = urljoin(url, link_parent['href']) if link_parent else url
+                    
+                    # Изображение
+                    img_tag = card.find_parent('div').find('img') if card.find_parent('div') else None
+                    image_url = urljoin(url, img_tag['src']) if img_tag else None
 
-            soup = BeautifulSoup(response.text, 'html.parser')
-            # Ищем карточки событий (структура может отличаться)
-            event_cards = soup.find_all(['article', 'div'], class_=re.compile(r'event|exhibition|card', re.I))
-
-            for card in event_cards[:10]:  # Ограничиваем количество
-                title_elem = card.find(['h1', 'h2', 'h3', 'a'], class_=re.compile(r'title|name', re.I))
-                if not title_elem:
-                    continue
-
-                title = title_elem.get_text(strip=True)
-                if not self.is_b2b_event(title):
-                    continue
-
-                # Извлекаем описание
-                desc_elem = card.find(['p', 'div'], class_=re.compile(r'description|text|content', re.I))
-                description = desc_elem.get_text(strip=True) if desc_elem else ""
-
-                # Извлекаем ссылку
-                link_elem = card.find('a', href=True)
-                url_event = link_elem['href'] if link_elem else url
-                if not url_event.startswith('http'):
-                    url_event = f"https://iteca.events{url_event}"
-
-                # Извлекаем дату
-                date_text = card.get_text()
-                start_date = self.extract_date(date_text)
-
-                # Извлекаем город
-                city = self.extract_city(date_text + " " + description)
-
-                events.append({
-                    'title': title,
-                    'description': description[:300] if description else "",
-                    'city': city,
-                    'start_date': start_date,
-                    'end_date': None,
-                    'url': url_event,
-                    'source': 'iteca.events',
-                })
+                    if self._is_relevant(title, description):
+                        events.append({
+                            'title': title, 'description': description, 'city': city,
+                            'place': raw_location, 'start_date': date, 'url': event_url,
+                            'image_url': image_url, 'source': 'iteca.events'
+                        })
+                except Exception as e:
+                    logger.error(f"Error extracting iteca item: {e}")
         except Exception as e:
-            logger.error(f"Ошибка парсинга iteca.events: {e}")
-
+            logger.error(f"Iteca global error: {e}")
         return events
 
-    async def parse_generic_site(self, url: str) -> List[Dict]:
-        """Универсальный парсер для сайтов с похожей структурой"""
+    async def parse_digitalbusiness(self) -> List[Dict]:
+        """Парсинг DigitalBusiness.kz (структура из ТЗ: ul class='article-list')"""
         events = []
         try:
-            response = await self.client.get(url)
-            response.raise_for_status()
+            url = "https://digitalbusiness.kz/calendar/"
+            resp = await self.client.get(url)
+            soup = BeautifulSoup(resp.text, 'lxml')
+            
+            items = soup.select('ul.article-list li div')
+            
+            for item in items:
+                try:
+                    title_tag = item.find('h4').find('a')
+                    if not title_tag: continue
+                    title = self._clean_text(title_tag.text)
+                    event_url = urljoin(url, title_tag['href'])
+                    
+                    desc_tag = item.find('p')
+                    description = self._clean_text(desc_tag.text) if desc_tag else ""
+                    
+                    date_tag = item.find('time')
+                    date_str = date_tag.text if date_tag else ""
+                    date = self._extract_date_ru(date_str)
+                    
+                    # Город часто в заголовке: "IT-беш. Астана"
+                    city = self._extract_city(title)
+                    
+                    # Попытка найти картинку в родительском li
+                    li = item.find_parent('li')
+                    img_tag = li.find('img') if li else None
+                    image_url = urljoin(url, img_tag['src']) if img_tag else None
 
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Ищем все ссылки и заголовки, которые могут быть событиями
-            links = soup.find_all('a', href=True)
-            headings = soup.find_all(['h1', 'h2', 'h3', 'h4'])
-
-            seen_titles = set()
-
-            for elem in links + headings:
-                text = elem.get_text(strip=True)
-                if not text or len(text) < 10:
-                    continue
-
-                if not self.is_b2b_event(text):
-                    continue
-
-                if text.lower() in seen_titles:
-                    continue
-                seen_titles.add(text.lower())
-
-                # Извлекаем ссылку
-                if elem.name == 'a':
-                    url_event = elem['href']
-                else:
-                    parent_link = elem.find_parent('a', href=True)
-                    url_event = parent_link['href'] if parent_link else url
-                    if not url_event.startswith('http'):
-                        url_event = f"{url}{url_event}"
-
-                # Ищем описание рядом
-                parent = elem.find_parent(['div', 'article', 'section'])
-                description = ""
-                if parent:
-                    desc_elem = parent.find(['p', 'div'], class_=re.compile(r'description|text|content', re.I))
-                    if desc_elem:
-                        description = desc_elem.get_text(strip=True)[:300]
-
-                # Извлекаем дату и город
-                context_text = parent.get_text() if parent else text
-                start_date = self.extract_date(context_text)
-                city = self.extract_city(context_text)
-
-                events.append({
-                    'title': text,
-                    'description': description,
-                    'city': city,
-                    'start_date': start_date,
-                    'end_date': None,
-                    'url': url_event,
-                    'source': url,
-                })
-
-                if len(events) >= 10:  # Ограничиваем количество
-                    break
-
+                    if self._is_relevant(title, description):
+                        events.append({
+                            'title': title, 'description': description, 'city': city,
+                            'place': None, 'start_date': date, 'url': event_url,
+                            'image_url': image_url, 'source': 'digitalbusiness.kz'
+                        })
+                except Exception as e: continue
         except Exception as e:
-            logger.error(f"Ошибка парсинга {url}: {e}")
-
+            logger.error(f"DigitalBusiness error: {e}")
         return events
 
-    async def parse_all_sources(self) -> List[Dict]:
-        """Парсинг всех источников"""
+    async def parse_worldexpo(self) -> List[Dict]:
+        """Парсинг WorldExpo.pro (структура из ТЗ: div class='item-content')"""
+        events = []
+        try:
+            url = "https://worldexpo.pro/country/kazahstan"
+            resp = await self.client.get(url)
+            soup = BeautifulSoup(resp.text, 'lxml')
+            
+            items = soup.find_all('div', class_='item-content')
+            for item in items:
+                try:
+                    title_tag = item.find('h4').find('a')
+                    title = self._clean_text(title_tag.text)
+                    event_url = urljoin(url, title_tag['href'])
+                    
+                    date_span = item.find('span', class_='item-content-date')
+                    date = self._extract_date_ru(date_span.text) if date_span else None
+                    
+                    loc_span = item.find('span', class_='search-location')
+                    city = self._extract_city(loc_span.text) if loc_span else None
+                    
+                    desc_p = item.find_all('p')[-1] # Обычно последнее p это описание
+                    description = self._clean_text(desc_p.text) if desc_p else ""
+
+                    if self._is_relevant(title, description):
+                        events.append({
+                            'title': title, 'description': description, 'city': city,
+                            'place': loc_span.text if loc_span else None,
+                            'start_date': date, 'url': event_url,
+                            'image_url': None, 'source': 'worldexpo.pro'
+                        })
+                except Exception as e: continue
+        except Exception as e:
+             logger.error(f"WorldExpo error: {e}")
+        return events
+
+    async def parse_generic(self, url: str) -> List[Dict]:
+        """Универсальный fallback парсер"""
+        events = []
+        try:
+            resp = await self.client.get(url)
+            soup = BeautifulSoup(resp.text, 'lxml')
+            # Простой поиск ссылок с ключевыми словами в тексте
+            for a in soup.find_all('a', href=True):
+                text = self._clean_text(a.text)
+                if len(text) > 10 and self._is_relevant(text, ""):
+                    event_url = urljoin(url, a['href'])
+                    events.append({
+                        'title': text, 'description': "", 
+                        'city': self._extract_city(text),
+                        'place': None, 'start_date': self._extract_date_ru(text),
+                        'url': event_url, 'image_url': None, 'source': url
+                    })
+        except Exception as e: pass
+        return events
+
+    async def parse_all(self) -> List[Dict]:
         all_events = []
-
-        # Специальный парсер для iteca.events
-        if "iteca.events" in PARSING_SOURCES[0]:
-            events = await self.parse_iteca_events()
-            all_events.extend(events)
-
-        # Универсальный парсер для остальных
-        for source in PARSING_SOURCES[1:]:
-            if "google.com" in source:
-                # Пропускаем Google поиск, так как это не прямой источник
-                continue
-            events = await self.parse_generic_site(source)
-            all_events.extend(events)
-
-        # Удаляем дубликаты по URL
-        seen_urls = set()
-        unique_events = []
-        for event in all_events:
-            if event['url'] not in seen_urls:
-                seen_urls.add(event['url'])
-                unique_events.append(event)
-
-        return unique_events
-
-    async def close(self):
-        """Закрыть клиент"""
-        await self.client.aclose()
+        # Запуск специализированных парсеров
+        all_events.extend(await self.parse_iteca())
+        all_events.extend(await self.parse_digitalbusiness())
+        all_events.extend(await self.parse_worldexpo())
+        
+        # Запуск дженерика для остальных (пример)
+        # all_events.extend(await self.parse_generic("https://profit.kz/events/"))
+        
+        # Дедупликация по URL
+        unique = {e['url']: e for e in all_events}.values()
+        return list(unique)

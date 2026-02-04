@@ -1,38 +1,29 @@
 from aiogram.filters.callback_data import CallbackData
+from typing import Optional
 
-
-class IndustryCallback(CallbackData, prefix="industry"):
-    """Callback для выбора индустрии"""
+class IndustryCallback(CallbackData, prefix="ind"):
     industry: str
 
-
 class CityCallback(CallbackData, prefix="city"):
-    """Callback для выбора города"""
     city: str
 
+class SettingsCallback(CallbackData, prefix="set"):
+    action: str
+    value: Optional[str] = None
 
-class SelectAllCallback(CallbackData, prefix="select_all"):
-    """Callback для выбора всех"""
-    type: str  # "industry" или "city"
+class SelectAllCallback(CallbackData, prefix="all"):
+    type: str
 
+class ConfirmCallback(CallbackData, prefix="conf"):
+    action: str
 
-class ConfirmCallback(CallbackData, prefix="confirm"):
-    """Callback для подтверждения выбора"""
-    action: str  # "save" или "cancel"
-
-
-class EventFeedbackCallback(CallbackData, prefix="event_feedback"):
-    """Callback для фидбека по ивенту"""
+class EventFeedbackCallback(CallbackData, prefix="fb"):
     event_id: int
-    action: str  # "like" или "dislike"
+    action: str
 
-
-class FeedbackReasonCallback(CallbackData, prefix="feedback_reason"):
-    """Callback для выбора причины отклонения"""
+class FeedbackReasonCallback(CallbackData, prefix="reason"):
     event_id: int
     reason: str
 
-
-class SettingsCallback(CallbackData, prefix="settings"):
-    """Callback для настроек"""
-    action: str  # "edit_industries", "edit_cities", "back"
+class EventsListCallback(CallbackData, prefix="evlist"):
+    page: int
