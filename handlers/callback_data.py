@@ -20,10 +20,16 @@ class ConfirmCallback(CallbackData, prefix="conf"):
 class EventFeedbackCallback(CallbackData, prefix="fb"):
     event_id: int
     action: str
+    page: int = 1  # Для кнопки "Вернуться к событиям"
 
 class FeedbackReasonCallback(CallbackData, prefix="reason"):
     event_id: int
-    reason: str
+    reason_idx: int  # Индекс в FEEDBACK_REASONS (ограничение 64 байт callback_data)
+    page: int = 1  # Для кнопки "Вернуться к событиям"
 
 class EventsListCallback(CallbackData, prefix="evlist"):
     page: int
+
+
+class MainMenuCallback(CallbackData, prefix="main"):
+    action: str

@@ -11,6 +11,7 @@ router = Router()
 
 def get_settings_main_keyboard():
     """Утилита для создания главного меню настроек"""
+    from handlers.callback_data import MainMenuCallback
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -24,6 +25,7 @@ def get_settings_main_keyboard():
                 callback_data=SettingsCallback(action="edit_cities").pack()
             )
         ],
+        [InlineKeyboardButton(text="← В главное меню", callback_data=MainMenuCallback(action="back").pack())],
     ])
 
 async def send_settings_menu(message_or_query, user: User):

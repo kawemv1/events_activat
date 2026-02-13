@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from sqlalchemy.orm.attributes import flag_modified
 from database.engine import SessionLocal
 from database.models import User
-from handlers.callback_data import IndustryCallback, CityCallback, SelectAllCallback, ConfirmCallback
+from handlers.callback_data import IndustryCallback, CityCallback, SelectAllCallback, ConfirmCallback, MainMenuCallback
 from config import INDUSTRIES, CITIES
 
 router = Router()
@@ -40,15 +40,13 @@ def get_keyboard(items, selected_items, type_):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Главное меню для пользователей, которые уже сохранили интересы в БД."""
-    from handlers.events import get_view_events_button
-    from handlers.settings import get_settings_main_keyboard
-    events_kb = get_view_events_button()
-    settings_kb = get_settings_main_keyboard()
-    # Объединяем: одна кнопка «Текущие выставки», под ней кнопки настроек
-    return InlineKeyboardMarkup(inline_keyboard=
-        events_kb.inline_keyboard + settings_kb.inline_keyboard
-    )
+    """Главное меню: Моя подборка, Настройки, Помощь."""
+    from handlers.callback_data import MainMenuCallback
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Моя подборка", callback_data=MainMenuCallback(action="events").pack())],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data=MainMenuCallback(action="settings").pack())],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data=MainMenuCallback(action="help").pack())],
+    ])
 
 
 @router.message(Command("start"))
@@ -129,8 +127,82 @@ async def city_click(clb: CallbackQuery, callback_data: CityCallback):
 
 @router.callback_query(ConfirmCallback.filter(F.action == "finish"))
 async def finish(clb: CallbackQuery):
-    from handlers.events import get_view_events_button
+    db = SessionLocal()
+    user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
+    if user:
+        flag_modified(user, "industries")
+        flag_modified(user, "cities")
+        db.commit()
+    db.close()
     await clb.message.edit_text(
         "✅ Настройка завершена! Жди уведомлений о новых выставках.",
-        reply_markup=get_view_events_button()
+        reply_markup=get_main_menu_keyboard()
     )
+
+
+@router.callback_query(SelectAllCallback.filter())
+async def select_all_click(clb: CallbackQuery, callback_data: SelectAllCallback):
+    db = SessionLocal()
+    user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
+    if not user:
+        await clb.answer("Сначала /start")
+        db.close()
+        return
+    t = callback_data.type
+    if t == "ind":
+        user.industries = list(INDUSTRIES)
+        flag_modified(user, "industries")
+        db.commit()
+        await clb.message.edit_reply_markup(reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind"))
+    else:
+        user.cities = list(CITIES)
+        flag_modified(user, "cities")
+        db.commit()
+        await clb.message.edit_reply_markup(reply_markup=get_keyboard(CITIES, user.cities, "city"))
+    db.close()
+    await clb.answer("Выбрано всё")
+
+
+@router.callback_query(MainMenuCallback.filter())
+async def main_menu_click(clb: CallbackQuery, callback_data: MainMenuCallback):
+    from handlers.events import show_events_page
+    from handlers.settings import send_settings_menu
+    db = SessionLocal()
+    user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
+    db.close()
+    if not user:
+        await clb.answer("Сначала /start")
+        return
+    action = callback_data.action
+    if action == "events":
+        await show_events_page(clb, page=1, is_edit=True)
+    elif action == "settings":
+        await send_settings_menu(clb, user)
+    elif action == "help":
+        help_text = (
+            "📖 <b>Помощь</b>\n\n"
+            "Я помогаю находить B2B выставки и форумы в Казахстане.\n\n"
+            "📅 <b>Моя подборка</b> — актуальные мероприятия по твоим индустриям и городам.\n"
+            "⚙️ <b>Настройки</b> — изменить индустрии и города.\n\n"
+            "Под каждой карточкой события есть кнопки 👍/👎 — "
+            "нажимай, чтобы улучшить рекомендации.\n\n"
+            "Новые события приходят автоматически при их появлении."
+        )
+        await clb.message.edit_text(help_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="← Назад", callback_data=MainMenuCallback(action="back").pack())]
+        ]))
+    elif action == "back":
+        ind_text = ", ".join(user.industries[:5]) if user.industries else "не выбраны"
+        city_text = ", ".join(user.cities[:5]) if user.cities else "не выбраны"
+        if user.cities and len(user.cities) > 5:
+            city_text += " …"
+        if user.industries and len(user.industries) > 5:
+            ind_text += " …"
+        await clb.message.edit_text(
+            "👋 Главное меню\n\n"
+            f"📊 Индустрии: {ind_text}\n"
+            f"🏙️ Города: {city_text}\n\n"
+            "Выбери действие:",
+            reply_markup=get_main_menu_keyboard()
+        )
+    await clb.answer()

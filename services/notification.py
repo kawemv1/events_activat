@@ -55,16 +55,33 @@ async def notify_users(bot: Bot, events: list, db: Session):
 
 def _check_filters(user: User, event: Event) -> bool:
     # Фильтр по городу
-    if "Все города" not in user.cities:
+    if user.cities and "Все города" not in user.cities:
         if not event.city or event.city not in user.cities:
             return False
-    # Тут можно добавить фильтр по индустрии, если мы начнем её парсить
+    # Фильтр по индустрии (если пользователь выбрал)
+    if user.industries and event.industry:
+        if event.industry not in user.industries:
+            return False
+    # Автотюнинг: исключённые индустрии
+    meta = user.feedback_metadata or {}
+    excluded_ind = meta.get("excluded_industries") or []
+    if event.industry and event.industry in excluded_ind:
+        return False
+    # Автотюнинг: исключённые источники
+    excluded_src = meta.get("excluded_sources") or []
+    if event.source and event.source in excluded_src:
+        return False
+    # Автотюнинг: только крупные (международные)
+    if meta.get("prefer_large_only"):
+        text = ((event.title or "") + " " + (event.description or "")).lower()
+        if "международн" not in text and "international" not in text:
+            return False
     return True
 
 def get_filtered_events_for_user(user: User, db: Session, limit: int = 100):
-    """Список выставок, подходящих пользователю по фильтрам (город)."""
+    """Список выставок, подходящих пользователю по фильтрам (город, индустрия, автотюнинг)."""
     q = db.query(Event).order_by(Event.id.desc())
-    events = q.limit(limit * 2).all()  # взять с запасом, отфильтруем
+    events = q.limit(limit * 3).all()
     return [e for e in events if _check_filters(user, e)][:limit]
 
 def _is_already_sent_or_rejected(user: User, event: Event, db: Session) -> bool:

@@ -11,31 +11,34 @@ DAILY_PARSING_HOUR = 10
 DAILY_PARSING_MINUTE = 0
 SCHEDULER_TIMEZONE = "Asia/Almaty"
 
-# Источники для парсинга
+# Источники для парсинга (все 10 из ТЗ)
 PARSING_SOURCES = [
-    "https://iteca.events/ru/exhibitions",
-    "https://kazexpo.kz/exhibitions",
-    "https://digitalbusiness.kz/calendar/",
+    "https://iteca.events/ru/",
+    "https://atakent-expo.kz/",
+    "http://www.qazexpo.kz/",
+    "https://expo-centralasia.com/",
+    "https://astanahub.com/ru/events",
+    "https://digitalbusiness.kz/",
     "https://profit.kz/events/",
-    "https://worldexpo.pro/country/kazahstan",
-    "https://vystavki.su/category/kazakhstan/",
-    "https://exposale.net/ru/country/kazahstan"
+    "https://worldexpo.pro/vystavki/kazahstan",
+    "https://exposale.net/ru/country/kazahstan",
+    "https://vystavki.su/kazakhstan/"
 ]
 
 STOP_WORDS = [
-    "мастер-класс", "вебинар", "курс", "обучение", "тренинг", 
-    "вакансия", "стажировка", "онлайн-марафон", "meetup"
+    "мастер-класс", "обучение", "вебинар", "вакансия", "онлайн-курс",
+    "курс", "тренинг", "стажировка", "онлайн-марафон", "meetup"
 ]
 
 B2B_KEYWORDS = [
-    "выставка", "форум", "экспо", "expo", "exhibition", 
-    "конференция", "саммит", "b2b", "стенд", "делегация", 
+    "выставка", "форум", "стенд", "экспонент", "делегация", "b2b",
+    "экспо", "expo", "exhibition", "конференция", "саммит",
     "networking", "нет воркинг", "business"
 ]
 
 INDUSTRIES = [
-    "IT & Digital", "Нефть и Газ", "Строительство", "Медицина", 
-    "Агропром", "Транспорт", "Энергетика", "Ритейл", "Mining", "Другое"
+    "IT/Digital", "Агросектор", "Медицина", "Строительство",
+    "Энергетика", "Ритейл/FMCG", "Нефть и Газ", "Транспорт", "Mining", "Другое"
 ]
 
 # Расширенный словарь городов для умного поиска
@@ -64,6 +67,6 @@ CITIES = list(CITY_VARIANTS.keys()) + ["Все города"]
 
 FEEDBACK_REASONS = [
     "Не моя сфера",
-    "Не B2B формат",
-    "Слишком мелко/Локально"
+    "Не B2B формат (мероприятие не подходит для продаж/стендов)",
+    "Недостаточный масштаб (слишком мелко)"
 ]

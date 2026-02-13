@@ -13,6 +13,8 @@ class User(Base):
     industries = Column(JSON, default=list)
     cities = Column(JSON, default=list)
     is_active = Column(Boolean, default=True)
+    # Автотюнинг: исключения на основе feedback
+    feedback_metadata = Column(JSON, default=dict)  # excluded_industries, excluded_sources, prefer_large_only
     created_at = Column(DateTime, default=datetime.utcnow)
     
     feedbacks = relationship("Feedback", back_populates="user")

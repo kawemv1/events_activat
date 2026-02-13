@@ -18,6 +18,10 @@ def init_db():
         if "image_url" not in columns:
             conn.execute(text("ALTER TABLE events ADD COLUMN image_url VARCHAR"))
             conn.commit()
+        users_cols = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+        if users_cols and "feedback_metadata" not in [row[1] for row in users_cols]:
+            conn.execute(text("ALTER TABLE users ADD COLUMN feedback_metadata VARCHAR DEFAULT '{}'"))
+            conn.commit()
 
 def get_db():
     db = SessionLocal()

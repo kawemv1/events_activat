@@ -49,5 +49,5 @@ def start_scheduler(bot: Bot):
         args=[bot],
         id="daily_events_update",
     )
-    logger.info(f"Daily events update scheduled at {DAILY_PARSING_HOUR:02d}:{DAILY_PARSING_MINUTE:02d} ({SCHEDULER_TIMEZONE})")
+    logger.info(f"Daily events update at {DAILY_PARSING_HOUR:02d}:{DAILY_PARSING_MINUTE:02d} ({SCHEDULER_TIMEZONE})")
     scheduler.start()
