@@ -33,12 +33,13 @@ export interface AppSettings {
 }
 
 export interface AuthUser {
+  id: number;
   username: string;
   name: string;
   surname: string;
 }
 
-export type Industry = 'All' | 'IT/Digital' | 'Agrosector' | 'FinTech' | 'Energy' | 'Retail' | 'Mining' | 'Агросектор' | 'Ритейл/FMCG' | 'Строительство' | 'Транспорт' | 'Энергетика';
+export type Industry = 'All' | 'IT/Digital' | 'Agrosector' | 'FinTech' | 'Energy' | 'Retail' | 'Mining' | 'Construction' | 'Transport' | 'Other';
 export type City = 'All' | 'Almaty' | 'Astana' | 'Shymkent' | 'Karaganda' | 'Алматы' | 'Астана' | 'Атырау' | 'Ереван' | 'Ташкент';
 
 export type NavTab = 'feed' | 'settings' | 'profile';

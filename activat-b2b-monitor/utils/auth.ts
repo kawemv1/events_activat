@@ -1,67 +1,27 @@
-import initSqlJs, { Database } from 'sql.js';
-
-let dbInstance: Database | null = null;
+import { supabaseGet, supabasePost } from './supabase';
 
 export interface User {
+  id: number;
   username: string;
   name: string;
   surname: string;
 }
 
-async function initDatabase(): Promise<Database> {
-  if (dbInstance) {
-    return dbInstance;
-  }
-
-  try {
-    const SQL = await initSqlJs({
-      locateFile: (file: string) => {
-        if (file.endsWith('.wasm')) {
-          return `/${file}`;
-        }
-        return `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`;
-      }
-    });
-
-    // Try to fetch existing database, or create new one
-    try {
-      const response = await fetch('/users.db');
-      if (response.ok) {
-        const buffer = await response.arrayBuffer();
-        const uint8Array = new Uint8Array(buffer);
-        dbInstance = new SQL.Database(uint8Array);
-      } else {
-        throw new Error('Database not found');
-      }
-    } catch (error) {
-      // Create new database if fetch fails
-      dbInstance = new SQL.Database();
-      dbInstance.run(`
-        CREATE TABLE IF NOT EXISTS users (
-          username TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          surname TEXT NOT NULL,
-          password_hash TEXT NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      // Insert sample account (password: Test123, base64 encoded)
-      dbInstance.run(`
-        INSERT OR IGNORE INTO users (username, name, surname, password_hash) 
-        VALUES ('kawemv1', 'Ansar', 'Kairzhan', 'VGVzdDEyMw==')
-      `);
-    }
-
-    return dbInstance;
-  } catch (error) {
-    console.error('Error initializing auth database:', error);
-    throw error;
-  }
+interface AuthUserRow {
+  username: string;
+  name: string;
+  surname: string;
+  password_hash: string;
 }
 
-// Simple password hashing (in production, use bcrypt)
+interface UserRow {
+  id: number;
+  telegram_id: number | null;
+  username: string | null;
+  first_name: string | null;
+}
+
 function hashPassword(password: string): string {
-  // Simple hash for demo - in production use bcrypt
   return btoa(password);
 }
 
@@ -69,41 +29,58 @@ function verifyPassword(password: string, hash: string): boolean {
   return btoa(password) === hash;
 }
 
+// Get or create user in users table for web app user
+async function getOrCreateWebUser(username: string, name: string, surname: string): Promise<number> {
+  // Check if user exists in users table (web users have telegram_id = 0 or negative)
+  const existingUsers = await supabaseGet<UserRow>(
+    'users',
+    `select=id,telegram_id,username,first_name&username=eq.${encodeURIComponent(username)}`
+  );
+
+  if (existingUsers.length > 0) {
+    return existingUsers[0].id;
+  }
+
+  // Create new user in users table for web app
+  // Use negative telegram_id to distinguish web users from Telegram users
+  const newUsers = await supabasePost<UserRow>('users', {
+    telegram_id: -Math.abs(username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)),
+    username: username,
+    first_name: `${name} ${surname}`,
+    countries: [],
+    industries: [],
+    cities: [],
+    is_active: true,
+    feedback_metadata: {},
+  });
+
+  return newUsers[0].id;
+}
+
 export async function login(username: string, password: string): Promise<User | null> {
   try {
-    const db = await initDatabase();
-    // sql.js doesn't support parameterized queries the same way, use string interpolation with escaping
-    const escapedUsername = username.replace(/'/g, "''");
-    const result = db.exec(`SELECT username, name, surname, password_hash FROM users WHERE username = '${escapedUsername}'`);
-    
-    console.log('Login query result:', result);
-    
-    if (result.length === 0 || !result[0].values.length) {
+    const rows = await supabaseGet<AuthUserRow>(
+      'auth_users',
+      `select=username,name,surname,password_hash&username=eq.${encodeURIComponent(username)}`
+    );
+
+    if (rows.length === 0) {
       console.log('No user found with username:', username);
       return null;
     }
 
-    const columns = result[0]['lc'] || result[0].columns;
-    const values = result[0].values;
-    const row = values[0];
-    
-    // Find column indices
-    const usernameIdx = columns.indexOf('username');
-    const nameIdx = columns.indexOf('name');
-    const surnameIdx = columns.indexOf('surname');
-    const passwordHashIdx = columns.indexOf('password_hash');
-    
-    const passwordHash = row[passwordHashIdx] as string;
-    console.log('Stored hash:', passwordHash, 'Input password:', password, 'Computed hash:', btoa(password));
-    
-    if (verifyPassword(password, passwordHash)) {
-      return {
-        username: row[usernameIdx] as string,
-        name: row[nameIdx] as string,
-        surname: row[surnameIdx] as string,
+    const row = rows[0];
+    if (verifyPassword(password, row.password_hash)) {
+      // Get or create user in users table
+      const userId = await getOrCreateWebUser(row.username, row.name, row.surname);
+      return { 
+        id: userId,
+        username: row.username, 
+        name: row.name, 
+        surname: row.surname 
       };
     }
-    
+
     console.log('Password verification failed');
     return null;
   } catch (error) {
@@ -112,32 +89,37 @@ export async function login(username: string, password: string): Promise<User | 
   }
 }
 
-export async function signup(username: string, name: string, surname: string, password: string): Promise<boolean> {
+export async function signup(username: string, name: string, surname: string, password: string): Promise<User | null> {
   try {
-    const db = await initDatabase();
     const passwordHash = hashPassword(password);
+    await supabasePost('auth_users', {
+      username,
+      name,
+      surname,
+      password_hash: passwordHash,
+    });
     
-    // Escape single quotes for SQL
-    const escapedUsername = username.replace(/'/g, "''");
-    const escapedName = name.replace(/'/g, "''");
-    const escapedSurname = surname.replace(/'/g, "''");
-    const escapedHash = passwordHash.replace(/'/g, "''");
-    
-    db.run(`INSERT INTO users (username, name, surname, password_hash) VALUES ('${escapedUsername}', '${escapedName}', '${escapedSurname}', '${escapedHash}')`);
-    
-    return true;
+    // Create user in users table
+    const userId = await getOrCreateWebUser(username, name, surname);
+    return {
+      id: userId,
+      username,
+      name,
+      surname,
+    };
   } catch (error) {
     console.error('Signup error:', error);
-    return false;
+    return null;
   }
 }
 
 export async function userExists(username: string): Promise<boolean> {
   try {
-    const db = await initDatabase();
-    const escapedUsername = username.replace(/'/g, "''");
-    const result = db.exec(`SELECT username FROM users WHERE username = '${escapedUsername}'`);
-    return result.length > 0 && result[0].values.length > 0;
+    const rows = await supabaseGet<{ username: string }>(
+      'auth_users',
+      `select=username&username=eq.${encodeURIComponent(username)}`
+    );
+    return rows.length > 0;
   } catch (error) {
     console.error('User exists check error:', error);
     return false;

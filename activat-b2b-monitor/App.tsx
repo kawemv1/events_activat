@@ -11,7 +11,7 @@ import { LoginPage } from './components/LoginPage';
 import { SignupPage } from './components/SignupPage';
 import { INDUSTRIES } from './constants';
 import { Event, Industry, NavTab, UserProfile, AppSettings, AuthUser } from './types';
-import { loadEvents, DatabaseEvent } from './utils/database';
+import { loadEvents, loadFeedbackCounts, loadUserReactions, submitFeedback, deleteFeedback, DatabaseEvent } from './utils/database';
 import { t, getLanguageCode } from './utils/translations';
 
 // Generate image URL - use database image_url if available, otherwise use static placeholder
@@ -103,37 +103,47 @@ function App() {
   // Load events from database
   useEffect(() => {
     const fetchEvents = async () => {
+      if (!user) return; // Don't load events if user is not logged in
+      
       try {
         setLoading(true);
         console.log('Loading events from database...');
-        const dbEvents = await loadEvents();
+        const [dbEvents, feedbackCounts, userReactions] = await Promise.all([
+          loadEvents(),
+          loadFeedbackCounts(),
+          loadUserReactions(user.id),
+        ]);
         console.log(`Loaded ${dbEvents.length} events from database`);
-        const convertedEvents: Event[] = dbEvents.map((dbEvent) => ({
-          id: dbEvent.id.toString(),
-          name: dbEvent.name || dbEvent.title,
-          title: dbEvent.title,
-          date: dbEvent.start_date 
-            ? new Date(dbEvent.start_date).toLocaleDateString('en-US', { 
-                month: 'short', 
-                day: 'numeric', 
-                year: 'numeric' 
-              })
-            : 'Date TBD',
-          startDate: dbEvent.start_date || undefined,
-          endDate: dbEvent.end_date || undefined,
-          city: dbEvent.city || 'Unknown',
-          country: dbEvent.country || 'Unknown',
-          description: dbEvent.description || '',
-          imageUrl: getEventImageUrl(dbEvent.image_url, dbEvent.id),
-          industry: dbEvent.industry || 'General',
-          url: dbEvent.url,
-          place: dbEvent.place,
-          source: dbEvent.source,
-          likes: 0,
-          dislikes: 0,
-          userReaction: null,
-          saved: false
-        }));
+        const convertedEvents: Event[] = dbEvents.map((dbEvent) => {
+          const fb = feedbackCounts[dbEvent.id] || { likes: 0, dislikes: 0 };
+          const reaction = userReactions[dbEvent.id] || null;
+          return {
+            id: dbEvent.id.toString(),
+            name: dbEvent.name || dbEvent.title,
+            title: dbEvent.title,
+            date: dbEvent.start_date
+              ? new Date(dbEvent.start_date).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric'
+                })
+              : 'Date TBD',
+            startDate: dbEvent.start_date || undefined,
+            endDate: dbEvent.end_date || undefined,
+            city: dbEvent.city || 'Unknown',
+            country: dbEvent.country || 'Unknown',
+            description: dbEvent.description || '',
+            imageUrl: getEventImageUrl(dbEvent.image_url, dbEvent.id),
+            industry: dbEvent.industry || 'General',
+            url: dbEvent.url,
+            place: dbEvent.place,
+            source: dbEvent.source,
+            likes: fb.likes,
+            dislikes: fb.dislikes,
+            userReaction: reaction,
+            saved: false,
+          };
+        });
         console.log(`Converted ${convertedEvents.length} events`);
         setEvents(convertedEvents);
       } catch (error) {
@@ -145,7 +155,7 @@ function App() {
       }
     };
     fetchEvents();
-  }, []);
+  }, [user]);
 
   // User Data State
   const [userProfile, setUserProfile] = useState<UserProfile>({
@@ -183,13 +193,20 @@ function App() {
   // Derived State
   const filteredEvents = useMemo(() => {
     const filtered = events.filter(event => {
-      // Industry matching
-      const industryMatch = selectedIndustry === 'All' || 
-        event.industry === selectedIndustry ||
-        (selectedIndustry === 'Agrosector' && (event.industry === 'Агросектор' || event.industry === 'Agrosector')) ||
-        (selectedIndustry === 'Energy' && (event.industry === 'Энергетика' || event.industry === 'Energy')) ||
-        (selectedIndustry === 'Retail' && (event.industry === 'Ритейл/FMCG' || event.industry === 'Retail')) ||
-        (selectedIndustry === 'IT/Digital' && event.industry === 'IT/Digital');
+      // Industry matching — map English filter to Russian DB values
+      const industryMap: Record<string, string[]> = {
+        'IT/Digital': ['IT/Digital'],
+        'Agrosector': ['Агросектор', 'Agrosector'],
+        'Energy': ['Энергетика', 'Energy', 'Энергетическое и электрическое оборудование', 'Нефть и газ', 'Нефть и Газ'],
+        'Retail': ['Ритейл/FMCG', 'Retail', 'Текстильная промышленность'],
+        'Mining': ['Mining', 'Горнодобывающая промышленность'],
+        'Construction': ['Строительство', 'Строительство и инженерное оборудование'],
+        'Transport': ['Транспорт'],
+        'FinTech': ['Финансы', 'FinTech'],
+        'Other': ['Другое', 'Медицина', 'Здравоохранение и фармацевтика', 'Туризм', 'Туризм и путешествия'],
+      };
+      const matchValues = industryMap[selectedIndustry] || [];
+      const industryMatch = selectedIndustry === 'All' || matchValues.some(v => event.industry === v.trim());
       
       // Country matching
       const countryMatch = !selectedCountry || event.country === selectedCountry;
@@ -234,11 +251,35 @@ function App() {
   [events]);
 
   // Handlers
-  const handleFeedback = useCallback((e: React.MouseEvent, id: string, type: 'like' | 'dislike') => {
+  const handleFeedback = useCallback(async (e: React.MouseEvent, id: string, type: 'like' | 'dislike') => {
     e.stopPropagation(); // Prevent opening detail view
-    setEvents(prevEvents => prevEvents.map(event => {
-      if (event.id !== id) return event;
-      
+    
+    if (!user) {
+      alert('Please log in to provide feedback');
+      return;
+    }
+
+    const eventId = parseInt(id, 10);
+    if (isNaN(eventId)) {
+      console.error('Invalid event ID:', id);
+      return;
+    }
+
+    // Store previous state for potential revert
+    let previousState: { reaction: 'like' | 'dislike' | null; likes: number; dislikes: number } | null = null;
+
+    // Optimistically update UI
+    setEvents(prevEvents => {
+      const event = prevEvents.find(e => e.id === id);
+      if (!event) return prevEvents;
+
+      // Store previous state
+      previousState = {
+        reaction: event.userReaction || null,
+        likes: event.likes,
+        dislikes: event.dislikes,
+      };
+
       const isRemoving = event.userReaction === type;
       const newReaction = isRemoving ? null : type;
       
@@ -253,14 +294,45 @@ function App() {
       if (newReaction === 'like') newLikes++;
       if (newReaction === 'dislike') newDislikes++;
 
-      return {
-        ...event,
-        userReaction: newReaction,
-        likes: newLikes,
-        dislikes: newDislikes
-      };
-    }));
-  }, []);
+      return prevEvents.map(event => {
+        if (event.id !== id) return event;
+        return {
+          ...event,
+          userReaction: newReaction,
+          likes: newLikes,
+          dislikes: newDislikes
+        };
+      });
+    });
+
+    // Save to Supabase
+    try {
+      const isRemoving = previousState?.reaction === type;
+      
+      if (isRemoving) {
+        // Remove feedback
+        await deleteFeedback(eventId, user.id);
+      } else {
+        // Submit feedback
+        await submitFeedback(eventId, user.id, type === 'like');
+      }
+    } catch (error) {
+      console.error('Error saving feedback:', error);
+      // Revert optimistic update on error
+      if (previousState) {
+        setEvents(prevEvents => prevEvents.map(event => {
+          if (event.id !== id) return event;
+          return {
+            ...event,
+            userReaction: previousState!.reaction,
+            likes: previousState!.likes,
+            dislikes: previousState!.dislikes,
+          };
+        }));
+      }
+      alert('Failed to save feedback. Please try again.');
+    }
+  }, [user]);
 
   const toggleSave = useCallback((id: string) => {
     setEvents(prev => prev.map(e => e.id === id ? { ...e, saved: !e.saved } : e));

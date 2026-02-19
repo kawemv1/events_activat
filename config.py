@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_KEY = os.getenv("API_KEY")
-DATABASE_URL = "sqlite:///./events_bot.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./events_bot.db")
 
 # Ежедневное обновление выставок в 10:00 (часовой пояс бота)
 DAILY_PARSING_HOUR = 10

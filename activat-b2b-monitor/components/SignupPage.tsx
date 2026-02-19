@@ -4,7 +4,7 @@ import { signup, userExists } from '../utils/auth';
 import { t, getLanguageCode, Language } from '../utils/translations';
 
 interface SignupPageProps {
-  onSignup: (user: { username: string; name: string; surname: string }) => void;
+  onSignup: (user: { id: number; username: string; name: string; surname: string }) => void;
   onSwitchToLogin: () => void;
   language?: string;
 }
@@ -44,9 +44,9 @@ export const SignupPage: React.FC<SignupPageProps> = ({ onSignup, onSwitchToLogi
         return;
       }
 
-      const success = await signup(username, name, surname, password);
-      if (success) {
-        onSignup({ username, name, surname });
+      const user = await signup(username, name, surname, password);
+      if (user) {
+        onSignup({ id: user.id, username: user.username, name: user.name, surname: user.surname });
       } else {
         setError(translate('signupFailed'));
       }

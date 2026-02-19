@@ -923,7 +923,7 @@ class EventParser:
                         'image_url': local_image_path,
                         'source': 'iteca.events',
                         'country': self._extract_country_from_city(city) or 'Казахстан',
-                        'industry': exh.get('industryTitle') or self._infer_industry(title, description),
+                        'industry': (lambda v: v if v and v != '$undefined' else None)(exh.get('industryTitle')) or self._infer_industry(title, description),
                     })
                 except Exception as e:
                     logger.debug(f"Iteca item error: {e}")
@@ -2045,6 +2045,9 @@ class EventParser:
                 logger.debug(f"Parser: Skipping event from '{country}': {event.get('title', '')[:60]}")
 
         logger.info(f"Parser: Country filter {len(filtered_events)} -> {len(country_filtered)} (removed {len(filtered_events) - len(country_filtered)} from non-target countries)")
+
+        # NOTE: AI enrichment (Groq Llama) happens in scheduler.py run_parsing_cycle(),
+        # not here, to avoid double API calls.
 
         # Set "NO IMAGE" for events without images
         for event in country_filtered:

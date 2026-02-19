@@ -1,6 +1,6 @@
 import { Event, Industry, City } from './types';
 
-export const INDUSTRIES: Industry[] = ['All', 'IT/Digital', 'FinTech', 'Agrosector', 'Агросектор', 'Energy', 'Энергетика', 'Retail', 'Ритейл/FMCG', 'Mining', 'Строительство', 'Транспорт'];
+export const INDUSTRIES: Industry[] = ['All', 'IT/Digital', 'Agrosector', 'Energy', 'Retail', 'Mining', 'Construction', 'Transport', 'Other'];
 export const CITIES: City[] = ['All', 'Almaty', 'Алматы', 'Astana', 'Астана', 'Shymkent', 'Атырау', 'Ереван', 'Ташкент'];
 
 export const COUNTRY_CITIES: Record<string, string[]> = {

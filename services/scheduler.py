@@ -1,19 +1,23 @@
 import logging
 import re
 import hashlib
+from pathlib import Path
 from difflib import SequenceMatcher
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from aiogram import Bot
 from database.engine import SessionLocal
-from database.models import Event
+from database.models import Event, UserEvent, Feedback
 from services.parser import EventParser
 from services.ai_service import extract_event_structured
 from services.notification import notify_users, notify_no_new_events
 from services.csv_export import export_events_to_csv
 from config import DAILY_PARSING_HOUR, DAILY_PARSING_MINUTE, SCHEDULER_TIMEZONE, STOP_WORDS
+
+EXPIRED_AFTER_DAYS = 7
+IMAGES_DIR = Path("parsed_images")
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
@@ -82,11 +86,51 @@ def _compute_event_hash(title: str, description: str, start_date: Optional[datet
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 
+def _cleanup_expired_events(db) -> int:
+    """Delete events whose start_date is more than 7 days in the past.
+    Also removes associated local images and related records."""
+    cutoff = datetime.utcnow() - timedelta(days=EXPIRED_AFTER_DAYS)
+    expired = db.query(Event).filter(Event.start_date < cutoff).all()
+
+    if not expired:
+        return 0
+
+    deleted_images = 0
+    for event in expired:
+        # Delete local image if it exists
+        if event.image_url and not event.image_url.startswith("http"):
+            image_path = Path(event.image_url)
+            if not image_path.is_absolute():
+                image_path = IMAGES_DIR.parent / event.image_url
+            if image_path.exists():
+                try:
+                    image_path.unlink()
+                    deleted_images += 1
+                except OSError as e:
+                    logger.warning(f"Failed to delete image {image_path}: {e}")
+
+        # Delete related records first (foreign keys)
+        db.query(UserEvent).filter(UserEvent.event_id == event.id).delete()
+        db.query(Feedback).filter(Feedback.event_id == event.id).delete()
+        db.delete(event)
+
+    db.commit()
+    logger.info(
+        f"Cleanup: deleted {len(expired)} expired events "
+        f"(older than {cutoff.strftime('%Y-%m-%d')}), "
+        f"removed {deleted_images} local images"
+    )
+    return len(expired)
+
+
 async def run_parsing_cycle(bot: Bot):
     logger.info("Starting parsing cycle...")
     parser = EventParser()
     db = SessionLocal()
     try:
+        # Step 0: Clean up expired events (start_date > 7 days ago)
+        _cleanup_expired_events(db)
+
         events_data = await parser.parse_all()
         new_events_objects = []
 

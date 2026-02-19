@@ -4,7 +4,7 @@ import { login } from '../utils/auth';
 import { t, getLanguageCode, Language } from '../utils/translations';
 
 interface LoginPageProps {
-  onLogin: (user: { username: string; name: string; surname: string }) => void;
+  onLogin: (user: { id: number; username: string; name: string; surname: string }) => void;
   onSwitchToSignup: () => void;
   language?: string;
 }

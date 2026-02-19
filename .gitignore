@@ -15,3 +15,6 @@ ENV/
 .DS_Store
 # Parsed images folder
 parsed_images/
+# Игнорировать изображения, но оставить папку через .gitkeep
+activat-b2b-monitor/public/parsed_images/*
+!activat-b2b-monitor/public/parsed_images/.gitkeep

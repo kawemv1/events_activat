@@ -18,6 +18,27 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      build: {
+        // Оптимизация билда для Vercel
+        outDir: 'dist',
+        assetsDir: 'assets',
+        sourcemap: false, // Отключаем sourcemaps для продакшена (можно включить при необходимости)
+        minify: 'esbuild', // Используем esbuild для быстрой минификации
+        chunkSizeWarningLimit: 1000, // Предупреждение при размере чанка > 1MB
+        rollupOptions: {
+          output: {
+            // Оптимизация разделения кода на чанки
+            manualChunks: {
+              'react-vendor': ['react', 'react-dom'],
+              'lucide-vendor': ['lucide-react'],
+            },
+          },
+        },
+        // Увеличиваем лимит для больших файлов (изображения)
+        assetsInlineLimit: 4096, // Файлы меньше 4KB будут инлайниться
+      },
+      // Убеждаемся, что папка public копируется правильно
+      publicDir: 'public',
     };
 });
