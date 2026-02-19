@@ -13,3 +13,5 @@ ENV/
 .venv
 *.log
 .DS_Store
+# Parsed images folder
+parsed_images/

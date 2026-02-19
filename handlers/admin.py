@@ -1,11 +1,13 @@
-from aiogram import Router
+from pathlib import Path
+
+from aiogram import Router, Bot
 from aiogram.types import Message
 from aiogram.filters import Command
-from aiogram import Bot
-from services.scheduler import run_parsing_cycle
 from sqlalchemy.orm import Session
+
 from database.engine import SessionLocal
 from database.models import User, Event
+from services.scheduler import run_parsing_cycle
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,19 +26,19 @@ async def cmd_parse(message: Message, bot: Bot):
             await message.answer("Сначала зарегистрируйся через /start")
             return
 
-        await message.answer("🔍 Начинаю парсинг событий... Это может занять некоторое время.")
-        
-        # Запускаем парсинг
+        await message.answer("🔍 Начинаю парсинг... Проверяю источники, отправляю в Gemini для извлечения полей. Это может занять несколько минут.")
+
         await run_parsing_cycle(bot)
-        
-        # Проверяем, сколько событий в БД
+
         events_count = db.query(Event).count()
-        
+        csv_path = Path("events.csv").resolve()
+
         await message.answer(
             f"✅ Парсинг завершен!\n\n"
             f"📊 Всего событий в базе: {events_count}\n"
-            f"🆕 Новые события будут отправлены тебе автоматически, если они соответствуют твоим фильтрам.\n\n"
-            f"💡 Используй /stats для просмотра статистики."
+            f"📁 Все результаты сохранены в CSV: {csv_path}\n"
+            f"Колонки: name, title, short_description, place, date, url, source, country, city, image_url\n\n"
+            f"💡 Используй /stats для статистики."
         )
     except Exception as e:
         logger.error(f"Ошибка при ручном парсинге: {e}")

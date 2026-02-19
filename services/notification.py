@@ -22,7 +22,8 @@ async def notify_users(bot: Bot, events: list, db: Session):
                 text = (
                     f"🎯 <b>{event.title}</b>\n\n"
                     f"📅 <b>Когда:</b> {event.start_date.strftime('%d.%m.%Y') if event.start_date else 'Дата уточняется'}\n"
-                    f"🏙 <b>Где:</b> {event.city or 'Не указан'} {f'({event.place})' if event.place else ''}\n\n"
+                    f"🌍 <b>Страна:</b> {event.country or '—'}\n"
+                    f"🏙 <b>Город:</b> {event.city or 'Не указан'}{f' ({event.place})' if event.place else ''}\n\n"
                     f"{event.description[:300]}...\n\n"
                     f"🔗 <a href='{event.url}'>Подробнее на сайте</a>"
                 )
@@ -54,6 +55,15 @@ async def notify_users(bot: Bot, events: list, db: Session):
                 logger.error(f"Failed to send event {event.id} to user {user.id}: {e}")
 
 def _check_filters(user: User, event: Event) -> bool:
+    # Фильтр по стране
+    user_countries = user.countries if user.countries is not None else []
+    if user_countries and event.country:
+        if event.country not in user_countries:
+            return False
+    elif user_countries and not event.country:
+        # Event has no country (legacy) - treat as Kazakhstan for backward compat
+        if "Казахстан" not in user_countries:
+            return False
     # Фильтр по городу
     if user.cities and "Все города" not in user.cities:
         if not event.city or event.city not in user.cities:
@@ -101,7 +111,7 @@ async def notify_no_new_events(bot: Bot, db: Session):
     users = db.query(User).filter(User.is_active == True).all()
     # Только тем, у кого уже есть настройки (прошли онбординг)
     for user in users:
-        if not (user.cities or user.industries):
+        if not ((user.countries and len(user.countries)) or user.cities or user.industries):
             continue
         try:
             await bot.send_message(

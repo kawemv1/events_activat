@@ -10,6 +10,7 @@ class User(Base):
     telegram_id = Column(Integer, unique=True, index=True, nullable=False)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
+    countries = Column(JSON, default=list)  # Multi-country support: list of country codes
     industries = Column(JSON, default=list)
     cities = Column(JSON, default=list)
     is_active = Column(Boolean, default=True)
@@ -23,6 +24,7 @@ class User(Base):
 class Event(Base):
     __tablename__ = "events"
     id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True)  # Full/official name from Gemini
     title = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)
     city = Column(String, nullable=True, index=True)
@@ -32,7 +34,9 @@ class Event(Base):
     end_date = Column(DateTime, nullable=True)
     url = Column(String, nullable=False, unique=True) # Unique чтобы не дублировать
     source = Column(String, nullable=True)
+    country = Column(String, nullable=True, index=True)
     industry = Column(String, nullable=True)
+    event_hash = Column(String, nullable=True, index=True)  # Hash for duplicate detection
     created_at = Column(DateTime, default=datetime.utcnow)
     
     feedbacks = relationship("Feedback", back_populates="event")

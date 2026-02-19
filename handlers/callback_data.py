@@ -1,11 +1,17 @@
 from aiogram.filters.callback_data import CallbackData
 from typing import Optional
 
+class CountryCallback(CallbackData, prefix="country"):
+    country: str
+    from_settings: bool = False
+
 class IndustryCallback(CallbackData, prefix="ind"):
     industry: str
+    from_settings: bool = False
 
 class CityCallback(CallbackData, prefix="city"):
     city: str
+    from_settings: bool = False
 
 class SettingsCallback(CallbackData, prefix="set"):
     action: str
@@ -13,9 +19,11 @@ class SettingsCallback(CallbackData, prefix="set"):
 
 class SelectAllCallback(CallbackData, prefix="all"):
     type: str
+    from_settings: bool = False
 
 class ConfirmCallback(CallbackData, prefix="conf"):
     action: str
+    step: Optional[str] = None  # "country" | "ind" | "city" for onboarding flow
 
 class EventFeedbackCallback(CallbackData, prefix="fb"):
     event_id: int

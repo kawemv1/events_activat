@@ -18,9 +18,22 @@ def init_db():
         if "image_url" not in columns:
             conn.execute(text("ALTER TABLE events ADD COLUMN image_url VARCHAR"))
             conn.commit()
+        if "country" not in columns:
+            conn.execute(text("ALTER TABLE events ADD COLUMN country VARCHAR"))
+            conn.commit()
+        if "name" not in columns:
+            conn.execute(text("ALTER TABLE events ADD COLUMN name VARCHAR"))
+            conn.commit()
+        if "event_hash" not in columns:
+            conn.execute(text("ALTER TABLE events ADD COLUMN event_hash VARCHAR"))
+            conn.commit()
         users_cols = conn.execute(text("PRAGMA table_info(users)")).fetchall()
-        if users_cols and "feedback_metadata" not in [row[1] for row in users_cols]:
+        users_columns = [row[1] for row in users_cols] if users_cols else []
+        if "feedback_metadata" not in users_columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN feedback_metadata VARCHAR DEFAULT '{}'"))
+            conn.commit()
+        if "countries" not in users_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN countries VARCHAR DEFAULT '[]'"))
             conn.commit()
 
 def get_db():

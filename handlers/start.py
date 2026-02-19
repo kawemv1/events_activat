@@ -4,39 +4,54 @@ from aiogram.filters import Command
 from sqlalchemy.orm.attributes import flag_modified
 from database.engine import SessionLocal
 from database.models import User
-from handlers.callback_data import IndustryCallback, CityCallback, SelectAllCallback, ConfirmCallback, MainMenuCallback
-from config import INDUSTRIES, CITIES
+from handlers.callback_data import CountryCallback, IndustryCallback, CityCallback, SelectAllCallback, ConfirmCallback, MainMenuCallback
+from config import COUNTRIES, INDUSTRIES, get_cities_for_countries
 
 router = Router()
 
-def get_industries_keyboard(selected_industries):
+def get_countries_keyboard(selected_countries, for_settings=False):
+    """Клавиатура выбора стран (для /start и настроек)."""
+    return get_keyboard(COUNTRIES, selected_countries or [], "country", for_settings=for_settings)
+
+def get_industries_keyboard(selected_industries, for_settings=False):
     """Клавиатура выбора индустрий (для /start и настроек)."""
-    return get_keyboard(INDUSTRIES, selected_industries or [], "ind")
+    return get_keyboard(INDUSTRIES, selected_industries or [], "ind", for_settings=for_settings)
 
-def get_cities_keyboard(selected_cities):
-    """Клавиатура выбора городов (для /start и настроек)."""
-    return get_keyboard(CITIES, selected_cities or [], "city")
+def get_cities_keyboard(selected_cities, countries=None, for_settings=False):
+    """Клавиатура выбора городов (города зависят от выбранных стран)."""
+    cities = get_cities_for_countries(countries or ["Казахстан"])
+    return get_keyboard(cities, selected_cities or [], "city", for_settings=for_settings)
 
-def get_keyboard(items, selected_items, type_):
+def get_keyboard(items, selected_items, type_, for_settings=False):
     kb = []
-    # Генерация кнопок сеткой по 2
     for i in range(0, len(items), 2):
         row = []
         for item in items[i:i+2]:
             mark = "✅ " if item in selected_items else ""
-            if type_ == "ind":
-                cb = IndustryCallback(industry=item).pack()
+            if type_ == "country":
+                cb = CountryCallback(country=item, from_settings=for_settings).pack()
+            elif type_ == "ind":
+                cb = IndustryCallback(industry=item, from_settings=for_settings).pack()
             else:
-                cb = CityCallback(city=item).pack()
+                cb = CityCallback(city=item, from_settings=for_settings).pack()
             row.append(InlineKeyboardButton(text=f"{mark}{item}", callback_data=cb))
         kb.append(row)
-    
-    kb.append([InlineKeyboardButton(text="Выбрать все", callback_data=SelectAllCallback(type=type_).pack())])
-    
-    action = "next_step" if type_ == 'ind' else "finish"
-    text = "Далее ➡️" if type_ == 'ind' else "Завершить ✅"
-    kb.append([InlineKeyboardButton(text=text, callback_data=ConfirmCallback(action=action).pack())])
-    
+
+    kb.append([InlineKeyboardButton(text="Выбрать все", callback_data=SelectAllCallback(type=type_, from_settings=for_settings).pack())])
+
+    if for_settings:
+        from handlers.callback_data import SettingsCallback
+        kb.append([InlineKeyboardButton(text="← Назад", callback_data=SettingsCallback(action="back").pack())])
+    elif type_ == "country":
+        action, step, text = "next_step", "country", "Далее ➡️"
+        kb.append([InlineKeyboardButton(text=text, callback_data=ConfirmCallback(action=action, step=step).pack())])
+    elif type_ == "ind":
+        action, step, text = "next_step", "ind", "Далее ➡️"
+        kb.append([InlineKeyboardButton(text=text, callback_data=ConfirmCallback(action=action, step=step).pack())])
+    else:
+        action, step, text = "finish", "city", "Завершить ✅"
+        kb.append([InlineKeyboardButton(text=text, callback_data=ConfirmCallback(action=action, step=step).pack())])
+
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -49,6 +64,12 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _has_preferences(user: User) -> bool:
+    """User has completed onboarding: countries + (industries or cities)."""
+    has_countries = user.countries and len(user.countries) > 0
+    has_rest = (user.industries and len(user.industries) > 0) or (user.cities and len(user.cities) > 0)
+    return has_countries and has_rest
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     db = SessionLocal()
@@ -58,75 +79,120 @@ async def cmd_start(message: Message):
             telegram_id=message.from_user.id,
             first_name=message.from_user.first_name,
             username=message.from_user.username,
-            industries=[], cities=[]
+            countries=[], industries=[], cities=[]
         )
         db.add(user)
         db.commit()
-    
-    # Уже проходил настройку (интересы/города сохранены в БД) — показываем главное меню
-    has_preferences = (user.industries and len(user.industries) > 0) or (user.cities and len(user.cities) > 0)
+    else:
+        # Backfill: existing users get Kazakhstan if countries empty
+        if not getattr(user, 'countries', None) or user.countries is None:
+            user.countries = ["Казахстан"]
+            flag_modified(user, "countries")
+            db.commit()
+
+    has_preferences = _has_preferences(user)
     db.close()
-    
+
     if has_preferences:
-        ind_text = ", ".join(user.industries[:5]) if user.industries else "не выбраны"
-        city_text = ", ".join(user.cities[:5]) if user.cities else "не выбраны"
-        if user.cities and len(user.cities) > 5:
+        country_text = ", ".join(user.countries[:4]) if user.countries else "не выбраны"
+        ind_text = ", ".join(user.industries[:4]) if user.industries else "не выбраны"
+        city_text = ", ".join(user.cities[:4]) if user.cities else "не выбраны"
+        if user.countries and len(user.countries) > 4:
+            country_text += " …"
+        if user.cities and len(user.cities) > 4:
             city_text += " …"
-        if user.industries and len(user.industries) > 5:
+        if user.industries and len(user.industries) > 4:
             ind_text += " …"
         await message.answer(
-            "👋 С возвращением! Твои интересы и города сохранены.\n\n"
+            "👋 С возвращением! Твои интересы сохранены.\n\n"
+            f"🌍 Страны: {country_text}\n"
             f"📊 Индустрии: {ind_text}\n"
             f"🏙️ Города: {city_text}\n\n"
             "Выбери действие:",
             reply_markup=get_main_menu_keyboard()
         )
         return
-    
-    await message.answer(
-        "👋 Привет! Я бот для поиска B2B выставок.\nДавай настроим твои интересы (их можно будет изменить в настройках).\n\nВыбери индустрии:",
-        reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind")
-    )
+
+    # Onboarding: countries first (if not yet selected)
+    if not (user.countries and len(user.countries) > 0):
+        await message.answer(
+            "👋 Привет! Я бот для поиска B2B выставок в странах СНГ.\n"
+            "Давай настроим твои интересы (их можно изменить в настройках).\n\n"
+            "Выбери страны:",
+            reply_markup=get_countries_keyboard(user.countries or [])
+        )
+        return
+
+    # Countries done, industries next
+    if not (user.industries and len(user.industries) > 0):
+        await message.answer("Выбери индустрии:", reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind"))
+        return
+
+    # Industries done, cities last
+    cities = get_cities_for_countries(user.countries or ["Казахстан"])
+    await message.answer("Выбери города:", reply_markup=get_keyboard(cities, user.cities, "city"))
+
+@router.callback_query(CountryCallback.filter())
+async def country_click(clb: CallbackQuery, callback_data: CountryCallback):
+    db = SessionLocal()
+    user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
+    country = callback_data.country
+    countries = user.countries if user.countries is not None else []
+    if country in countries:
+        user.countries = [c for c in countries if c != country]
+    else:
+        user.countries = countries + [country]
+    flag_modified(user, "countries")
+    db.commit()
+    from_settings = getattr(callback_data, "from_settings", False)
+    await clb.message.edit_reply_markup(reply_markup=get_countries_keyboard(user.countries, for_settings=from_settings))
+    db.close()
 
 @router.callback_query(IndustryCallback.filter())
 async def industry_click(clb: CallbackQuery, callback_data: IndustryCallback):
     db = SessionLocal()
     user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
-    
     ind = callback_data.industry
-    if ind in user.industries: user.industries = [i for i in user.industries if i != ind]
-    else: user.industries = user.industries + [ind]
-    
-    # Force update JSON column
+    if ind in user.industries:
+        user.industries = [i for i in user.industries if i != ind]
+    else:
+        user.industries = user.industries + [ind]
     flag_modified(user, "industries")
-    
     db.commit()
-    await clb.message.edit_reply_markup(reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind"))
+    from_settings = getattr(callback_data, "from_settings", False)
+    await clb.message.edit_reply_markup(reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind", for_settings=from_settings))
     db.close()
 
 @router.callback_query(ConfirmCallback.filter(F.action == "next_step"))
-async def next_step(clb: CallbackQuery):
+async def next_step(clb: CallbackQuery, callback_data: ConfirmCallback):
     db = SessionLocal()
     user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
+    step = getattr(callback_data, "step", None) or "ind"
     db.close()
-    await clb.message.edit_text("Теперь выбери города:", reply_markup=get_keyboard(CITIES, user.cities, "city"))
+    if step == "country":
+        await clb.message.edit_text("Выбери индустрии:", reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind"))
+    else:
+        cities = get_cities_for_countries(user.countries or ["Казахстан"])
+        await clb.message.edit_text("Выбери города:", reply_markup=get_keyboard(cities, user.cities, "city"))
 
 @router.callback_query(CityCallback.filter())
 async def city_click(clb: CallbackQuery, callback_data: CityCallback):
     db = SessionLocal()
     user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
-    
     city = callback_data.city
-    if city in user.cities: user.cities = [c for c in user.cities if c != city]
-    else: user.cities = user.cities + [city]
-    
+    if city in user.cities:
+        user.cities = [c for c in user.cities if c != city]
+    else:
+        user.cities = user.cities + [city]
     flag_modified(user, "cities")
     db.commit()
-    await clb.message.edit_reply_markup(reply_markup=get_keyboard(CITIES, user.cities, "city"))
+    from_settings = getattr(callback_data, "from_settings", False)
+    cities = get_cities_for_countries(user.countries or ["Казахстан"])
+    await clb.message.edit_reply_markup(reply_markup=get_keyboard(cities, user.cities, "city", for_settings=from_settings))
     db.close()
 
 @router.callback_query(ConfirmCallback.filter(F.action == "finish"))
-async def finish(clb: CallbackQuery):
+async def finish(clb: CallbackQuery, callback_data: ConfirmCallback):
     db = SessionLocal()
     user = db.query(User).filter_by(telegram_id=clb.from_user.id).first()
     if user:
@@ -149,16 +215,23 @@ async def select_all_click(clb: CallbackQuery, callback_data: SelectAllCallback)
         db.close()
         return
     t = callback_data.type
-    if t == "ind":
+    from_settings = getattr(callback_data, "from_settings", False)
+    if t == "country":
+        user.countries = list(COUNTRIES)
+        flag_modified(user, "countries")
+        db.commit()
+        await clb.message.edit_reply_markup(reply_markup=get_countries_keyboard(user.countries, for_settings=from_settings))
+    elif t == "ind":
         user.industries = list(INDUSTRIES)
         flag_modified(user, "industries")
         db.commit()
-        await clb.message.edit_reply_markup(reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind"))
+        await clb.message.edit_reply_markup(reply_markup=get_keyboard(INDUSTRIES, user.industries, "ind", for_settings=from_settings))
     else:
-        user.cities = list(CITIES)
+        cities = get_cities_for_countries(user.countries or ["Казахстан"])
+        user.cities = list(cities)
         flag_modified(user, "cities")
         db.commit()
-        await clb.message.edit_reply_markup(reply_markup=get_keyboard(CITIES, user.cities, "city"))
+        await clb.message.edit_reply_markup(reply_markup=get_keyboard(cities, user.cities, "city", for_settings=from_settings))
     db.close()
     await clb.answer("Выбрано всё")
 
@@ -181,7 +254,7 @@ async def main_menu_click(clb: CallbackQuery, callback_data: MainMenuCallback):
     elif action == "help":
         help_text = (
             "📖 <b>Помощь</b>\n\n"
-            "Я помогаю находить B2B выставки и форумы в Казахстане.\n\n"
+            "Я помогаю находить B2B выставки и форумы в странах СНГ (Казахстан, Узбекистан, Азербайджан и др.).\n\n"
             "📅 <b>Моя подборка</b> — актуальные мероприятия по твоим индустриям и городам.\n"
             "⚙️ <b>Настройки</b> — изменить индустрии и города.\n\n"
             "Под каждой карточкой события есть кнопки 👍/👎 — "
@@ -192,14 +265,18 @@ async def main_menu_click(clb: CallbackQuery, callback_data: MainMenuCallback):
             [InlineKeyboardButton(text="← Назад", callback_data=MainMenuCallback(action="back").pack())]
         ]))
     elif action == "back":
-        ind_text = ", ".join(user.industries[:5]) if user.industries else "не выбраны"
-        city_text = ", ".join(user.cities[:5]) if user.cities else "не выбраны"
-        if user.cities and len(user.cities) > 5:
+        country_text = ", ".join((user.countries or [])[:4]) or "не выбраны"
+        ind_text = ", ".join(user.industries[:4]) if user.industries else "не выбраны"
+        city_text = ", ".join(user.cities[:4]) if user.cities else "не выбраны"
+        if (user.countries or []) and len(user.countries) > 4:
+            country_text += " …"
+        if user.cities and len(user.cities) > 4:
             city_text += " …"
-        if user.industries and len(user.industries) > 5:
+        if user.industries and len(user.industries) > 4:
             ind_text += " …"
         await clb.message.edit_text(
             "👋 Главное меню\n\n"
+            f"🌍 Страны: {country_text}\n"
             f"📊 Индустрии: {ind_text}\n"
             f"🏙️ Города: {city_text}\n\n"
             "Выбери действие:",

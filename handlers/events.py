@@ -14,9 +14,10 @@ DESCRIPTION_MAX_LEN = 300  # 2-3 предложения
 
 
 def _format_event_card(e: Event, page: int, total: int) -> str:
-    """Формат карточки: Заголовок, Дата и Город, Описание (2-3 предложения)."""
+    """Формат карточки: Заголовок, Дата, Страна, Город, Описание (2-3 предложения)."""
     title_safe = html.escape((e.title or "").strip())
     date_str = e.start_date.strftime("%d.%m.%Y") if e.start_date else "Дата уточняется"
+    country_str = e.country or "—"
     city_str = e.city or "Город не указан"
     place_str = f" ({e.place})" if e.place else ""
     desc = (e.description or "").strip()
@@ -26,6 +27,7 @@ def _format_event_card(e: Event, page: int, total: int) -> str:
     return (
         f"🎯 <b>{title_safe}</b>\n\n"
         f"📅 <b>Дата:</b> {date_str}\n"
+        f"🌍 <b>Страна:</b> {country_str}\n"
         f"🏙 <b>Город:</b> {city_str}{place_str}\n\n"
         f"📝 {desc}\n\n"
         f"<i>Карточка {page} из {total}</i>"
