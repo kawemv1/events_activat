@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Parsed images - ignore all files except .gitkeep
+public/parsed_images/*
+!public/parsed_images/.gitkeep

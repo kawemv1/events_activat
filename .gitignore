@@ -13,8 +13,9 @@ ENV/
 .venv
 *.log
 .DS_Store
-# Parsed images folder
-parsed_images/
-# Игнорировать изображения, но оставить папку через .gitkeep
+# Parsed images folder - ignore all files except .gitkeep
+parsed_images/*
+!parsed_images/.gitkeep
+# Игнорировать изображения в activat-b2b-monitor, но оставить папку через .gitkeep
 activat-b2b-monitor/public/parsed_images/*
 !activat-b2b-monitor/public/parsed_images/.gitkeep
